@@ -1,0 +1,493 @@
+openapi: 3.1.0
+info:
+  title: ChauffeurX On-Demand Driver Platform API
+  description: High-performance backend API for on-demand personal chauffeur and driver dispatch platform.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+paths:
+  /api/v1/health:
+    get:
+      summary: Health check endpoint
+      description: Returns health status of API, PostgreSQL database, and Redis cache.
+      responses:
+        '200':
+          description: System operational
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "ok" }
+                  database: { type: string, example: "connected" }
+                  redis: { type: string, example: "connected" }
+                  timestamp: { type: string, format: date-time }
+
+  /api/v1/auth/request-otp:
+    post:
+      summary: Request SMS OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone: { type: string, example: "+919876543210" }
+                role: { type: string, enum: [CUSTOMER, DRIVER], default: CUSTOMER }
+      responses:
+        '200':
+          description: OTP dispatched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "OTP sent successfully" }
+                  expires_in_seconds: { type: integer, example: 300 }
+
+  /api/v1/auth/verify-otp:
+    post:
+      summary: Verify SMS OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone, otp]
+              properties:
+                phone: { type: string, example: "+919876543210" }
+                otp: { type: string, example: "123456" }
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  refresh_token: { type: string }
+                  token_type: { type: string, example: "bearer" }
+                  is_new_user: { type: boolean }
+                  user:
+                    $ref: '#/components/schemas/User'
+
+  /api/v1/auth/me:
+    get:
+      summary: Current user profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current user information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /api/v1/garage/vehicles:
+    get:
+      summary: List customer vehicles
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of vehicles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Vehicle'
+    post:
+      summary: Add new vehicle
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VehicleCreate'
+      responses:
+        '201':
+          description: Vehicle created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Vehicle'
+
+  /api/v1/pricing/estimate:
+    post:
+      summary: Get fare estimate
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service_type, duration_hours, pickup_lat, pickup_lng]
+              properties:
+                service_type: { type: string, enum: [HOURLY_LOCAL, OUTSTATION_ROUND_TRIP] }
+                duration_hours: { type: number, example: 4.0 }
+                pickup_lat: { type: number, example: 12.9716 }
+                pickup_lng: { type: number, example: 77.5946 }
+                drop_lat: { type: number, nullable: true }
+                drop_lng: { type: number, nullable: true }
+                promo_code: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Computed fare quote
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FareEstimate'
+
+  /api/v1/bookings:
+    post:
+      summary: Create new booking
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingCreate'
+      responses:
+        '201':
+          description: Booking submitted and dispatched
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+
+  /api/v1/bookings/active:
+    get:
+      summary: Get active booking
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Active booking or null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+
+  /api/v1/bookings/{id}:
+    get:
+      summary: Get booking details
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Full booking detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+
+  /api/v1/bookings/{id}/cancel:
+    post:
+      summary: Cancel booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, example: "Change of plans" }
+      responses:
+        '200':
+          description: Booking cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+
+  /api/v1/bookings/{id}/rate:
+    post:
+      summary: Rate completed trip
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stars]
+              properties:
+                stars: { type: integer, minimum: 1, maximum: 5 }
+                tags: { type: array, items: { type: string } }
+                review_text: { type: string, nullable: true }
+                tip_amount: { type: number, default: 0.0 }
+      responses:
+        '200':
+          description: Rating recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+
+  /api/v1/driver/duty-status:
+    put:
+      summary: Toggle driver duty status
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [duty_status]
+              properties:
+                duty_status: { type: string, enum: [ONLINE, OFFLINE] }
+      responses:
+        '200':
+          description: Duty status updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  duty_status: { type: string }
+
+  /api/v1/driver/telemetry:
+    post:
+      summary: Ingest driver GPS location
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [latitude, longitude]
+              properties:
+                latitude: { type: number }
+                longitude: { type: number }
+                bearing: { type: number, default: 0.0 }
+                speed: { type: number, default: 0.0 }
+      responses:
+        '200':
+          description: Telemetry stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recorded: { type: boolean, example: true }
+
+  /api/v1/driver/trips/{id}/start:
+    post:
+      summary: Start trip with Customer OTP
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otp]
+              properties:
+                otp: { type: string, example: "5824" }
+      responses:
+        '200':
+          description: Trip started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+
+  /api/v1/driver/trips/{id}/complete:
+    post:
+      summary: Complete trip and finalize fare
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Trip completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+
+  /api/v1/wallet:
+    get:
+      summary: Get wallet balance and transactions
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Wallet overview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  balance: { type: number, example: 54.20 }
+                  currency: { type: string, example: "USD" }
+                  transactions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        amount: { type: number }
+                        transaction_type: { type: string, enum: [CREDIT, DEBIT] }
+                        description: { type: string }
+                        created_at: { type: string, format: date-time }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        phone: { type: string }
+        email: { type: string, nullable: true }
+        full_name: { type: string }
+        avatar_url: { type: string, nullable: true }
+        role: { type: string, enum: [CUSTOMER, DRIVER, ADMIN] }
+        created_at: { type: string, format: date-time }
+
+    Vehicle:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        brand: { type: string, example: "Honda" }
+        model: { type: string, example: "City" }
+        year: { type: integer, example: 2022 }
+        transmission: { type: string, enum: [MANUAL, AUTOMATIC] }
+        fuel_type: { type: string, example: "PETROL" }
+        plate_number: { type: string, example: "KA01AB1234" }
+        color: { type: string, example: "Silver" }
+
+    VehicleCreate:
+      type: object
+      required: [brand, model, transmission, plate_number]
+      properties:
+        brand: { type: string }
+        model: { type: string }
+        year: { type: integer, nullable: true }
+        transmission: { type: string, enum: [MANUAL, AUTOMATIC] }
+        fuel_type: { type: string, default: "PETROL" }
+        plate_number: { type: string }
+        color: { type: string, nullable: true }
+
+    FareEstimate:
+      type: object
+      properties:
+        base_fare: { type: number, example: 25.00 }
+        extra_minute_rate: { type: number, example: 0.20 }
+        estimated_duration_minutes: { type: integer, example: 240 }
+        estimated_distance_km: { type: number, example: 35.0 }
+        night_charges: { type: number, example: 0.0 }
+        taxes: { type: number, example: 4.50 }
+        discount: { type: number, example: 0.0 }
+        total_fare: { type: number, example: 29.50 }
+        currency: { type: string, example: "USD" }
+
+    BookingCreate:
+      type: object
+      required: [vehicle_id, service_type, pickup_address, pickup_lat, pickup_lng, duration_hours]
+      properties:
+        vehicle_id: { type: string, format: uuid }
+        service_type: { type: string, enum: [HOURLY_LOCAL, OUTSTATION_ROUND_TRIP] }
+        booking_type: { type: string, enum: [NOW, SCHEDULED], default: NOW }
+        scheduled_pickup_time: { type: string, format: date-time, nullable: true }
+        duration_hours: { type: number, example: 4.0 }
+        pickup_address: { type: string }
+        pickup_lat: { type: number }
+        pickup_lng: { type: number }
+        drop_address: { type: string, nullable: true }
+        drop_lat: { type: number, nullable: true }
+        drop_lng: { type: number, nullable: true }
+        payment_mode: { type: string, enum: [WALLET, CARD, CASH], default: WALLET }
+        promo_code: { type: string, nullable: true }
+
+    Booking:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        booking_code: { type: string }
+        customer_id: { type: string, format: uuid }
+        driver_id: { type: string, format: uuid, nullable: true }
+        vehicle_id: { type: string, format: uuid }
+        service_type: { type: string }
+        booking_type: { type: string }
+        status: { type: string }
+        pickup_address: { type: string }
+        pickup_lat: { type: number }
+        pickup_lng: { type: number }
+        drop_address: { type: string, nullable: true }
+        drop_lat: { type: number, nullable: true }
+        drop_lng: { type: number, nullable: true }
+        start_otp: { type: string, nullable: true }
+        trip_start_time: { type: string, format: date-time, nullable: true }
+        trip_end_time: { type: string, format: date-time, nullable: true }
+        estimated_fare: { type: number }
+        final_fare: { type: number, nullable: true }
+        payment_mode: { type: string }
+        payment_status: { type: string }
+        created_at: { type: string, format: date-time }
+        driver:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string, format: uuid }
+            full_name: { type: string }
+            avatar_url: { type: string, nullable: true }
+            phone: { type: string }
+            rating_average: { type: number }
+            total_trips: { type: integer }
+            current_lat: { type: number, nullable: true }
+            current_lng: { type: number, nullable: true }
